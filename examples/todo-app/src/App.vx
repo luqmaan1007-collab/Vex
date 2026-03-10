@@ -1,0 +1,309 @@
+// ════════════════════════════════════════════════════════════
+//  Vex Todo App  —  examples/todo-app/src/App.vx
+//
+//  Demonstrates:
+//    ✅ Auto re-render from useState / useReducer
+//    ✅ useEffect, useMemo, useCallback
+//    ✅ Context API
+//    ✅ Custom hooks
+//    ✅ Multiple components, props, children
+//    ✅ JSX (compiled by transpiler/vex.js)
+//    ✅ Store (vex-store signals)
+//    ✅ Router (BrowserRouter, Link, useNavigate)
+//    ✅ User-defined syntax macros (unless, forever, times)
+// ════════════════════════════════════════════════════════════
+
+// ── User-defined syntax (Vex unique feature) ──────────────────
+syntax unless(cond, body)     => `if(!(cond)) body`
+syntax times(n, body)         => `for(let __i=0;__i<n;__i++) body`
+syntax guard(cond, otherwise) => `if(!(cond)) { return otherwise }`
+
+// ── Imports ───────────────────────────────────────────────────
+import {
+  useState, useReducer, useEffect, useMemo,
+  useCallback, useRef, useContext, createContext
+} from "@vex/core"
+
+import { BrowserRouter, Routes, Route, Link, useNavigate } from "@vex/router"
+import { signal } from "@vex/store"
+
+// ══════════════════════════════════════════════════════════════
+//  THEME CONTEXT  — shared across the whole app
+// ══════════════════════════════════════════════════════════════
+const ThemeContext = createContext("light")
+
+// ══════════════════════════════════════════════════════════════
+//  CUSTOM HOOK: useTodos
+//  All todo state lives here. Demonstrates useReducer.
+// ══════════════════════════════════════════════════════════════
+fn todoReducer(state, action) {
+  match action.type {
+    "ADD"    => [...state, { id: Date.now(), text: action.text, done: false, priority: action.priority || "normal" }],
+    "TOGGLE" => state.map(t => t.id === action.id ? { ...t, done: !t.done } : t),
+    "DELETE" => state.filter(t => t.id !== action.id),
+    "EDIT"   => state.map(t => t.id === action.id ? { ...t, text: action.text } : t),
+    "CLEAR_DONE" => state.filter(t => !t.done),
+    _        => state,
+  }
+}
+
+fn useTodos() {
+  const [todos, dispatch] = useReducer(todoReducer, [
+    { id: 1, text: "Build Vex framework",  done: true,  priority: "high" },
+    { id: 2, text: "Write the reconciler", done: true,  priority: "high" },
+    { id: 3, text: "Fix auto re-render",   done: false, priority: "high" },
+    { id: 4, text: "Add TypeScript types", done: false, priority: "normal" },
+    { id: 5, text: "Write example app",    done: false, priority: "normal" },
+  ])
+
+  const add    = useCallback((text, priority) => dispatch({ type: "ADD", text, priority }), [])
+  const toggle = useCallback((id) => dispatch({ type: "TOGGLE", id }), [])
+  const del    = useCallback((id) => dispatch({ type: "DELETE", id }), [])
+  const edit   = useCallback((id, text) => dispatch({ type: "EDIT", id, text }), [])
+  const clear  = useCallback(() => dispatch({ type: "CLEAR_DONE" }), [])
+
+  const stats = useMemo(() => ({
+    total:  todos.length,
+    done:   todos.filter(t => t.done).length,
+    active: todos.filter(t => !t.done).length,
+  }), [todos])
+
+  return { todos, add, toggle, del, edit, clear, stats }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  CUSTOM HOOK: useFilter
+// ══════════════════════════════════════════════════════════════
+fn useFilter(todos) {
+  const [filter, setFilter] = useState("all")
+  const [search, setSearch] = useState("")
+
+  const filtered = useMemo(() => {
+    let result = todos
+    if (filter === "active") result = result.filter(t => !t.done)
+    if (filter === "done")   result = result.filter(t => t.done)
+    if (search) result = result.filter(t => t.text.toLowerCase().includes(search.toLowerCase()))
+    return result
+  }, [todos, filter, search])
+
+  return { filter, setFilter, search, setSearch, filtered }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  COMPONENT: AddTodoForm
+// ══════════════════════════════════════════════════════════════
+component AddTodoForm({ onAdd }) {
+  const [text, setText]         = useState("")
+  const [priority, setPriority] = useState("normal")
+  const inputRef                = useRef(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])   // run once on mount — auto re-render handles the rest
+
+  fn handleSubmit(e) {
+    e.preventDefault()
+    guard(text.trim(), null)
+    onAdd(text.trim(), priority)
+    setText("")
+    inputRef.current?.focus()
+  }
+
+  render =>
+    <form onSubmit={handleSubmit} className="add-form">
+      <input
+        ref={inputRef}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        placeholder="What needs to be done?"
+        className="add-input"
+      />
+      <select value={priority} onChange={e => setPriority(e.target.value)} className="priority-select">
+        <option value="low">Low</option>
+        <option value="normal">Normal</option>
+        <option value="high">High</option>
+      </select>
+      <button type="submit" disabled={!text.trim()} className="add-btn">Add</button>
+    </form>
+}
+
+// ══════════════════════════════════════════════════════════════
+//  COMPONENT: TodoItem
+// ══════════════════════════════════════════════════════════════
+component TodoItem({ todo, onToggle, onDelete, onEdit }) {
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState(todo.text)
+
+  fn commitEdit() {
+    guard(editText.trim(), null)
+    onEdit(todo.id, editText.trim())
+    setEditing(false)
+  }
+
+  fn handleKeyDown(e) {
+    if (e.key === "Enter")  commitEdit()
+    if (e.key === "Escape") { setEditText(todo.text); setEditing(false) }
+  }
+
+  const priorityColor = {
+    high:   "#ef4444",
+    normal: "#3b82f6",
+    low:    "#6b7280",
+  }[todo.priority] || "#3b82f6"
+
+  render =>
+    <li className={`todo-item ${todo.done ? "done" : ""}`}>
+      <span className="priority-dot" style={{ background: priorityColor }} />
+      <input
+        type="checkbox"
+        checked={todo.done}
+        onChange={() => onToggle(todo.id)}
+        className="todo-check"
+      />
+      {editing
+        ? <input
+            value={editText}
+            onChange={e => setEditText(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={handleKeyDown}
+            className="edit-input"
+            autoFocus
+          />
+        : <span
+            className="todo-text"
+            onDoubleClick={() => setEditing(true)}
+          >
+            {todo.text}
+          </span>
+      }
+      <button onClick={() => onDelete(todo.id)} className="delete-btn">✕</button>
+    </li>
+}
+
+// ══════════════════════════════════════════════════════════════
+//  COMPONENT: FilterBar
+// ══════════════════════════════════════════════════════════════
+component FilterBar({ filter, setFilter, search, setSearch, stats, onClear }) {
+  render =>
+    <div className="filter-bar">
+      <input
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        placeholder="Search..."
+        className="search-input"
+      />
+      <div className="filter-btns">
+        {["all","active","done"].map(f =>
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`filter-btn ${filter === f ? "active" : ""}`}
+          >
+            {f === "all" ? `All (${stats.total})` : f === "active" ? `Active (${stats.active})` : `Done (${stats.done})`}
+          </button>
+        )}
+      </div>
+      {stats.done > 0 &&
+        <button onClick={onClear} className="clear-btn">Clear done</button>
+      }
+    </div>
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PAGE: TodoPage  (main page)
+// ══════════════════════════════════════════════════════════════
+component TodoPage() {
+  const theme                 = useContext(ThemeContext)
+  const { todos, add, toggle, del, edit, clear, stats } = useTodos()
+  const { filter, setFilter, search, setSearch, filtered } = useFilter(todos)
+
+  // Log re-renders in dev — useEffect fires after every render
+  useEffect(() => {
+    console.log(`[Vex] Re-rendered. ${stats.active} active todos.`)
+  })
+
+  render =>
+    <div className={`app ${theme}`}>
+      <header className="app-header">
+        <h1>Vex Todo App</h1>
+        <p>{stats.active} items left</p>
+        <Link to="/about" className="about-link">About</Link>
+      </header>
+
+      <AddTodoForm onAdd={add} />
+
+      <FilterBar
+        filter={filter}
+        setFilter={setFilter}
+        search={search}
+        setSearch={setSearch}
+        stats={stats}
+        onClear={clear}
+      />
+
+      <ul className="todo-list">
+        {filtered.length === 0
+          ? <li className="empty">No todos {filter !== "all" ? `with filter "${filter}"` : "yet"}. Add one above!</li>
+          : filtered.map(t =>
+              <TodoItem
+                key={t.id}
+                todo={t}
+                onToggle={toggle}
+                onDelete={del}
+                onEdit={edit}
+              />
+            )
+        }
+      </ul>
+    </div>
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PAGE: AboutPage
+// ══════════════════════════════════════════════════════════════
+component AboutPage() {
+  const navigate = useNavigate()
+
+  render =>
+    <div className="about-page">
+      <h2>About Vex</h2>
+      <p>Vex is a UI framework with a fiber reconciler, hook scheduler,</p>
+      <p>keyed diffing, and unlimited user-defined syntax.</p>
+      <ul>
+        <li>✅ Automatic re-render (no manual Vex.render() calls)</li>
+        <li>✅ Keyed reconciliation (not container overwrite)</li>
+        <li>✅ Full hook scheduler (useState, useEffect, useMemo...)</li>
+        <li>✅ JSX compilation via transpiler/vex.js</li>
+        <li>✅ TypeScript types in types/vex.d.ts</li>
+        <li>✅ Separate packages: vex-core, vex-store, vex-router</li>
+      </ul>
+      <button onClick={() => navigate("/")} className="back-btn">← Back</button>
+    </div>
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ROOT APP  — sets up router + theme context
+// ══════════════════════════════════════════════════════════════
+component App() {
+  const [theme, setTheme] = useState("light")
+
+  render =>
+    <ThemeContext.Provider value={theme}>
+      <BrowserRouter>
+        <div className="app-wrapper">
+          <button
+            onClick={() => setTheme(t => t === "light" ? "dark" : "light")}
+            className="theme-toggle"
+          >
+            {theme === "light" ? "🌙 Dark" : "☀️ Light"}
+          </button>
+          <Routes>
+            <Route path="/"       element={<TodoPage />} />
+            <Route path="/about"  element={<AboutPage />} />
+          </Routes>
+        </div>
+      </BrowserRouter>
+    </ThemeContext.Provider>
+}
+
+export default App
