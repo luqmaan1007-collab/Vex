@@ -1,0 +1,13 @@
+{
+  "name": "vex",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vex — React-level UI framework with unlimited .vx syntax",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "author": "",
+  "license": "MIT"
+}
